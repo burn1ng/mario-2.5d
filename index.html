@@ -62,10 +62,10 @@
     </div>
     <div id="game-over">GAME OVER<br><span style="font-size: 20px;">Press R to restart</span></div>
     <div id="victory">YOU WIN!<br><span style="font-size: 20px;">Press R to restart</span></div>
-    <div id="instructions">A / D or Arrow Keys to Move • Space / W to Jump • R to Restart</div>
+    <div id="instructions">A / D or Arrow Keys to Move • Space / W to Jump (Tap again to Double Jump) • R to Restart</div>
 
     <script>
-        // --- 1. CORE PHYSICS UTILITY (Placed at top to ensure scope definition) ---
+        // --- 1. CORE PHYSICS UTILITY ---
         function checkCollision(r1, r2) {
             return r1.x < r2.x + r2.w &&
                    r1.x + r1.w > r2.x &&
@@ -81,9 +81,26 @@
         let timeRemaining = 400;
         let timerInterval = null;
 
-        // Snappy physics constants
-        const GRAVITY = -0.016;
-        const TERMINAL_VELOCITY = -0.35;
+        // Snappy, professional physics settings
+        const physics = {
+            gravity: -0.016,
+            gravityHold: -0.008, // Variable jump gravity
+            accel: 0.015,        // Ground acceleration
+            decel: 0.16,         // Ground friction
+            airAccel: 0.01,      // Air steering acceleration
+            airDecel: 0.03,      // Air drag
+            maxSpeed: 0.16,      // Maximum horizontal speed
+            jumpForce: 0.3,      // Initial jump strength
+            doubleJumpForce: 0.25, // Mid-air jump strength
+            coyoteTimeMax: 8,    // Coyote time frame window
+            jumpBufferMax: 6,    // Jump buffering frame window
+            terminalVelocity: -0.32
+        };
+
+        // Active tracking frames
+        let coyoteTimer = 0;
+        let jumpBufferTimer = 0;
+        let jumpCount = 0; // Tracks double-jump allowance
 
         // Playable character settings
         const player = {
@@ -93,8 +110,6 @@
             y: 2,
             vx: 0,
             vy: 0,
-            speed: 0.15,
-            jumpForce: 0.32,
             grounded: false,
             mesh: null
         };
@@ -130,7 +145,12 @@
         window.addEventListener('keydown', (e) => {
             if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.Left = true;
             if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.Right = true;
-            if (e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') keys.Jump = true;
+            if (e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') {
+                if (!keys.Jump) {
+                    jumpBufferTimer = physics.jumpBufferMax; // Trigger buffer on initial downpress
+                }
+                keys.Jump = true;
+            }
             if (e.code === 'KeyR') resetGame();
         });
         window.addEventListener('keyup', (e) => {
@@ -449,13 +469,46 @@
                 const p = particles[i];
                 p.mesh.position.x += p.vx;
                 p.mesh.position.y += p.vy;
-                p.vy += GRAVITY;
+                p.vy += physics.gravity;
                 p.life--;
 
                 if (p.life <= 0) {
                     scene.remove(p.mesh);
                     particles.splice(i, 1);
                 }
+            }
+        }
+
+        // Spawns mid-air rings during double jumping
+        function spawnDoubleJumpRing(x, y) {
+            const ringGeo = new THREE.RingGeometry(0.1, 0.4, 16);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2;
+            ring.position.set(x, y, 0);
+            scene.add(ring);
+
+            let frame = 0;
+            function animateRing() {
+                if (frame < 15) {
+                    ring.scale.x += 0.12;
+                    ring.scale.y += 0.12;
+                    ring.material.opacity -= 0.06;
+                    frame++;
+                    requestAnimationFrame(animateRing);
+                } else {
+                    scene.remove(ring);
+                }
+            }
+            animateRing();
+        }
+
+        // Helper to place multiple individual breakable bricks
+        function addIndividualBricks(xStart, y, count) {
+            for (let i = 0; i < count; i++) {
+                const block = { type: 'brick', x: xStart + i, y: y, w: 1, h: 1 };
+                block.mesh = createBox(block.x, block.y, block.w, block.h, 1, 0xCD853F);
+                solids.push(block);
             }
         }
 
@@ -512,75 +565,76 @@
             coins.length = 0;
             solids.length = 0;
 
-            // Background Puffs
+            // Background clouds
             createCloud(5, 7.5, -4);
             createCloud(18, 9, -5);
             createCloud(32, 8.5, -4);
             createCloud(48, 10, -6);
             createCloud(62, 7.5, -4);
 
-            // Spaced out blueprint details to ensure comfortable clearing
-            const levelBlueprint = [
-                // Ground boundaries
+            // Ground boundaries (with spacious gaps to make jumping clearable)
+            const groundSegments = [
                 { type: 'ground', x: 0, y: -1, w: 20, h: 2 },
                 { type: 'ground', x: 23, y: -1, w: 18, h: 2 },
-                { type: 'ground', x: 44, y: -1, w: 32, h: 2 },
+                { type: 'ground', x: 44, y: -1, w: 32, h: 2 }
+            ];
 
-                // Green Pipes
+            groundSegments.forEach(block => {
+                createBox(block.x, block.y, block.w, block.h - 0.2, 1.2, 0x8B4513);
+                createBox(block.x, block.y + block.h - 0.2, block.w, 0.2, 1.25, 0x228B22);
+                solids.push(block);
+            });
+
+            // Pipes (Pipe 2 lowered to 2.2 height to ensure comfortable clearances)
+            const pipesBlueprint = [
                 { type: 'pipe', x: 11, y: 1, w: 2, h: 2 },
-                { type: 'pipe', x: 33, y: 1, w: 2, h: 3 },
+                { type: 'pipe', x: 33, y: 1, w: 2, h: 2.2 } 
+            ];
 
-                // Blocks, items, and breakable bricks
-                { type: 'brick', x: 5, y: 4.2, w: 1, h: 1 },
+            pipesBlueprint.forEach(block => {
+                block.mesh = createPipeMesh(block.x, block.y, block.w, block.h);
+                solids.push({ type: 'pipe', x: block.x, y: block.y, w: block.w, h: block.h });
+            });
+
+            // Standard singular ? blocks
+            const qblocksBlueprint = [
                 { type: 'qblock', x: 6, y: 4.2, w: 1, h: 1 },
-                { type: 'brick', x: 7, y: 4.2, w: 1, h: 1 },
                 { type: 'qblock', x: 8, y: 4.2, w: 1, h: 1 },
-                { type: 'brick', x: 9, y: 4.2, w: 1, h: 1 },
+                { type: 'qblock', x: 29, y: 7.2, w: 1, h: 1 }
+            ];
 
-                // Segment 2 details
-                { type: 'brick', x: 26, y: 4.2, w: 3, h: 1 },
-                { type: 'qblock', x: 29, y: 7.2, w: 1, h: 1 },
-                { type: 'brick', x: 31, y: 4.2, w: 2, h: 1 },
+            qblocksBlueprint.forEach(block => {
+                block.mesh = createBox(block.x, block.y, block.w, block.h, 1, 0xFFD700);
+                block.hit = false;
+                solids.push(block);
+            });
 
-                // Steps layout
+            // Add single breakable Bricks recursively to make them fully dynamic
+            addIndividualBricks(5, 4.2, 1);
+            addIndividualBricks(7, 4.2, 1);
+            addIndividualBricks(9, 4.2, 1);
+
+            // Segment 2 Bricks
+            addIndividualBricks(26, 4.2, 3);
+            addIndividualBricks(31, 4.2, 2);
+
+            // Steps layout
+            const stepsBlueprint = [
                 { type: 'stair', x: 49, y: 1, w: 4, h: 1 },
                 { type: 'stair', x: 50, y: 2, w: 3, h: 1 },
                 { type: 'stair', x: 51, y: 3, w: 2, h: 1 },
-                { type: 'stair', x: 52, y: 4, w: 1, h: 1 },
-
-                // Goal flagpole Coordinates
-                { type: 'flagpole', x: 65, y: 1, w: 0.2, h: 8 }
+                { type: 'stair', x: 52, y: 4, w: 1, h: 1 }
             ];
 
-            // Render static elements
-            levelBlueprint.forEach(block => {
-                if (block.type === 'ground') {
-                    createBox(block.x, block.y, block.w, block.h - 0.2, 1.2, 0x8B4513);
-                    createBox(block.x, block.y + block.h - 0.2, block.w, 0.2, 1.25, 0x228B22);
-                    solids.push(block);
-                }
-                else if (block.type === 'brick') {
-                    block.mesh = createBox(block.x, block.y, block.w, block.h, 1, 0xCD853F);
-                    solids.push(block);
-                }
-                else if (block.type === 'qblock') {
-                    block.mesh = createBox(block.x, block.y, block.w, block.h, 1, 0xFFD700);
-                    block.hit = false;
-                    solids.push(block);
-                }
-                else if (block.type === 'stair') {
-                    createBox(block.x, block.y, block.w, block.h, 1, 0xD2B48C);
-                    solids.push({ type: 'stair', x: block.x, y: block.y, w: block.w, h: block.h });
-                }
-                else if (block.type === 'pipe') {
-                    block.mesh = createPipeMesh(block.x, block.y, block.w, block.h);
-                    solids.push({ type: 'pipe', x: block.x, y: block.y, w: block.w, h: block.h });
-                }
-                else if (block.type === 'flagpole') {
-                    block.mesh = createFlagpoleMesh(block.x, block.y, block.w, block.h);
-                    flagpole = block;
-                }
+            stepsBlueprint.forEach(block => {
+                createBox(block.x, block.y, block.w, block.h, 1, 0xD2B48C);
+                solids.push({ type: 'stair', x: block.x, y: block.y, w: block.w, h: block.h });
             });
+
+            // Flag pole goal
+            const poleBlock = { type: 'flagpole', x: 65, y: 1, w: 0.2, h: 8 };
+            poleBlock.mesh = createFlagpoleMesh(poleBlock.x, poleBlock.y, poleBlock.w, poleBlock.h);
+            flagpole = poleBlock;
 
             // Standalone collectibles
             const coinPositions = [
@@ -628,11 +682,11 @@
                 mesh: createKoopaMesh()
             });
 
-            // 3. Piranha Plants (Stationary inside Pipe 2)
+            // 3. Piranha Plants (Stationary inside Pipe 2 - adjusted top base coordinate)
             enemies.push({
                 type: 'piranha',
-                x: 33.6, y: 4.0,
-                baseY: 4.0, // Top of pipe 2
+                x: 33.6, y: 3.2,
+                baseY: 3.2, // Match pipe 2 height
                 offsetY: 0,
                 dir: 1,
                 timer: 0,
@@ -646,28 +700,66 @@
         function updatePhysics() {
             if (gameOver || victory) return;
 
-            // X-axis calculations
+            // X-axis calculations with inert acceleration
+            let currentAccel = player.grounded ? physics.accel : physics.airAccel;
+            let currentDecel = player.grounded ? physics.decel : physics.airDecel;
+
             if (keys.Left) {
-                player.vx = -player.speed;
+                player.vx -= currentAccel;
+                if (player.vx < -physics.maxSpeed) player.vx = -physics.maxSpeed;
             } else if (keys.Right) {
-                player.vx = player.speed;
+                player.vx += currentAccel;
+                if (player.vx > physics.maxSpeed) player.vx = physics.maxSpeed;
             } else {
-                player.vx *= 0.8;
-                if (Math.abs(player.vx) < 0.01) player.vx = 0;
+                // Apply drag friction
+                if (player.vx > 0) {
+                    player.vx -= currentDecel;
+                    if (player.vx < 0) player.vx = 0;
+                } else if (player.vx < 0) {
+                    player.vx += currentDecel;
+                    if (player.vx > 0) player.vx = 0;
+                }
             }
 
             // Apply X movement
             player.x += player.vx;
             resolveCollisions('x');
 
-            // Y-axis calculations (Gravity and jumping)
-            player.vy += GRAVITY;
-            if (player.vy < TERMINAL_VELOCITY) player.vy = TERMINAL_VELOCITY;
-
-            if (keys.Jump && player.grounded) {
-                player.vy = player.jumpForce;
-                player.grounded = false;
+            // Y-axis calculations (Gravity with Variable jump heights)
+            let activeGravity = physics.gravity;
+            if (player.vy > 0 && keys.Jump) {
+                activeGravity = physics.gravityHold; // Hold key to rise higher / fall slower
             }
+            player.vy += activeGravity;
+            if (player.vy < physics.terminalVelocity) player.vy = physics.terminalVelocity;
+
+            // Coyote time update
+            if (player.grounded) {
+                coyoteTimer = physics.coyoteTimeMax;
+                jumpCount = 0; // Reset double-jump on landing
+            } else {
+                if (coyoteTimer > 0) coyoteTimer--;
+            }
+
+            // Check buffered or standard jump triggerings
+            if (jumpBufferTimer > 0) {
+                if (coyoteTimer > 0 && jumpCount === 0) {
+                    // First Jump
+                    player.vy = physics.jumpForce;
+                    player.grounded = false;
+                    coyoteTimer = 0;
+                    jumpBufferTimer = 0;
+                    jumpCount = 1;
+                } else if (jumpCount === 1) {
+                    // Double Jump
+                    player.vy = physics.doubleJumpForce;
+                    jumpCount = 2;
+                    jumpBufferTimer = 0;
+                    spawnDoubleJumpRing(player.x + player.width / 2, player.y);
+                }
+            }
+
+            if (jumpBufferTimer > 0) jumpBufferTimer--;
 
             // Apply Y movement
             player.y += player.vy;
@@ -729,7 +821,7 @@
                         } else if (player.vy > 0) {
                             player.y = block.y - player.height;
 
-                            // Dynamic box-hitting actions
+                            // Dynamic block-hitting actions
                             if (block.type === 'qblock' && !block.hit) {
                                 block.hit = true;
                                 block.mesh.material.color.setHex(0x8B5A2B); // Dulling out the ? block color
@@ -815,7 +907,7 @@
                     }
 
                     // Gravitational effects
-                    enemy.vy += GRAVITY;
+                    enemy.vy += physics.gravity;
                     enemy.y += enemy.vy;
 
                     // Floor alignments
@@ -872,7 +964,6 @@
                             else if (enemy.state === 'shell') {
                                 // Kick the shell
                                 enemy.state = 'sliding';
-                                // Kick direction depends on which side Mario is on
                                 if (player.x + player.width / 2 < enemy.x + enemy.w / 2) {
                                     enemy.vx = 0.25;
                                 } else {
@@ -961,6 +1052,10 @@
             timeRemaining = 400;
             gameOver = false;
             victory = false;
+
+            coyoteTimer = 0;
+            jumpBufferTimer = 0;
+            jumpCount = 0;
 
             document.getElementById('score').innerText = '000000';
             document.getElementById('coins').innerText = '00';
